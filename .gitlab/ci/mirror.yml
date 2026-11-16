@@ -1,0 +1,431 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: "$CI_COMMIT_BRANCH"
+    - when: never
+
+stages:
+  - prepare
+  - validate
+  - publish
+
+default:
+  image: artifactory.tls.renault.fr/docker/swlabs/docker/python/base:3.11
+  tags:
+    - kube
+    - rswl
+  interruptible: true
+  timeout: 30 minutes
+
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+  DENO_NO_UPDATE_CHECK: "1"
+  DENO_TLS_CA_STORE: system,mozilla
+  NODE_USE_SYSTEM_CA: "1"
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  npm_config_registry: https://registry.npmjs.org
+
+prepare-tools:
+  stage: prepare
+  script:
+    - |
+      python - <<'PY'
+      import hashlib
+      import io
+      import json
+      from pathlib import Path
+      import platform
+      import tarfile
+      from urllib.request import urlopen
+      import zipfile
+
+      if (platform.system(), platform.machine()) != ("Linux", "x86_64"):
+          raise SystemExit("This CI configuration requires a Linux x86_64 runner")
+      runtime = Path(".mirror-ci-tools")
+      binaries = runtime / "bin"
+      binaries.mkdir(parents=True)
+      releases = [
+          ("deno", "2.9.7", "https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-unknown-linux-gnu.zip", "c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490", "deno"),
+          ("prim", "0.9.1", "https://github.com/driftsys/prim/releases/download/v0.9.1/prim-x86_64-unknown-linux-musl.tar.gz", "ce6831ecea65191caa6b97c8884297742d93da902ccf3025ec682d0f30f2eceb", "prim"),
+          ("shellcheck", "0.10.0", "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz", "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87", "shellcheck-v0.10.0/shellcheck"),
+          ("git-std", "0.10.2", "https://github.com/driftsys/git-std/releases/download/v0.10.2/git-std-x86_64-unknown-linux-musl.tar.gz", "51d91390ee57145eb23cc75db6b00f455fac9517101dd84c44ff2d8e50988424", "./git-std"),
+          ("node", "24.22.0", "https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.xz", "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008", "node-v24.22.0-linux-x64/bin/node"),
+      ]
+      evidence = []
+      for name, version, url, expected, member_name in releases:
+          with urlopen(url, timeout=180) as response:
+              archive = response.read()
+          if hashlib.sha256(archive).hexdigest() != expected:
+              raise SystemExit(f"Archive SHA-256 mismatch: {name}")
+          if url.endswith(".zip"):
+              with zipfile.ZipFile(io.BytesIO(archive)) as release:
+                  content = release.read(member_name)
+          else:
+              with tarfile.open(fileobj=io.BytesIO(archive)) as release:
+                  content = release.extractfile(member_name).read()
+                  if name == "node":
+                      for member in release.getmembers():
+                          prefix = "node-v24.22.0-linux-x64/lib/node_modules/npm/"
+                          if member.isfile() and member.name.startswith(prefix):
+                              relative = Path(member.name.removeprefix(prefix))
+                              if relative.is_absolute() or ".." in relative.parts:
+                                  raise SystemExit("Unsafe npm archive member")
+                              destination = runtime / "npm" / relative
+                              destination.parent.mkdir(parents=True, exist_ok=True)
+                              destination.write_bytes(release.extractfile(member).read())
+          executable = binaries / name
+          executable.write_bytes(content)
+          executable.chmod(0o755)
+          evidence.append({"tool": name, "version": version, "url": url, "archive_sha256": expected, "binary_sha256": hashlib.sha256(content).hexdigest()})
+      (runtime / "tools.json").write_text(json.dumps(evidence, indent=2) + "\n")
+      PY
+    - export PATH="$CI_PROJECT_DIR/.mirror-ci-tools/bin:$PATH"
+    - export DENO_DIR="/tmp/markspec-deno-$CI_JOB_ID"
+    - deno --version
+    - prim --version
+    - node --version
+    - shellcheck --version
+    - git-std --version
+    - deno run --frozen --allow-net --allow-read --allow-write scripts/fetch_grammars.ts
+    - git diff --exit-code -- deno.lock grammars/grammars.lock
+    - |
+      python - <<'PY'
+      import hashlib
+      import json
+      from pathlib import Path
+
+      lock = json.loads(Path("grammars/grammars.lock").read_text())
+      for grammar in lock["grammars"]:
+          content = (Path("grammars") / grammar["file"]).read_bytes()
+          if hashlib.sha256(content).hexdigest() != grammar["sha256"]:
+              raise SystemExit(f"Grammar SHA-256 mismatch: {grammar['file']}")
+      PY
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - .mirror-ci-tools/
+      - grammars/*.wasm
+
+.with-tools:
+  stage: validate
+  needs:
+    - job: prepare-tools
+      artifacts: true
+  before_script:
+    - unset NO_COLOR
+    - export MIRROR_CI_TOOLS="/tmp/markspec-tools-$CI_JOB_ID"
+    - mv .mirror-ci-tools "$MIRROR_CI_TOOLS"
+    - export PATH="$MIRROR_CI_TOOLS/bin:$PATH"
+    - export DENO_DIR="/tmp/markspec-deno-$CI_JOB_ID"
+    - deno --version
+
+format:
+  extends: .with-tools
+  script:
+    - deno fmt --check
+    - prim fmt --check .
+
+lint:
+  extends: .with-tools
+  script:
+    - deno lint
+    - prim lint .
+    - shellcheck -s sh install.sh
+
+type-check:
+  extends: .with-tools
+  script:
+    - deno check --frozen packages/markspec/main.ts packages/markspec/core/mod.ts packages/markspec/lsp/server.ts packages/markspec/mcp/server.ts packages/markspec/desk/server.ts
+
+test-linux:
+  extends: .with-tools
+  script:
+    - |
+      pdf_filter=$(python - <<'PY'
+      from pathlib import Path
+      import re
+      import sys
+
+      retained = {
+          "packages/markspec/render/typst/mod_test.ts": [
+              "compileTypst: compiles simple Typst to PDF",
+              "compileTypst: reports error for invalid Typst",
+              "compileTypst: mainFilePath lets relative paths resolve from source dir",
+          ],
+          "tests/e2e/doc_build_test.ts": [
+              "doc build <file>: a Satisfies target in another file reports no MSL-L006 (#950)",
+          ],
+      }
+      excluded = {
+          "packages/markspec/render/typst/mod_test.ts": [
+              "compileTypst: compiles with markspec-doc template",
+              "compileTypst: compiles with cmarker",
+          ],
+          "tests/e2e/doc_build_test.ts": [
+              "doc build: produces PDF from Markdown",
+              "doc build: output file has PDF magic bytes",
+              "doc build: --output flag writes to custom path",
+          ],
+      }
+      for source, names in excluded.items():
+          text = Path(source).read_text()
+          actual = re.findall(r'Deno\.test\(\s*"([^"]+)"', text)
+          expected = names + retained[source]
+          if sorted(actual) != sorted(expected) or text.count("Deno.test(") != len(actual):
+              raise SystemExit(f"PDF test inventory changed; review the five-test exclusion: {source}")
+          for name in names:
+              print(f"EXCLUDED (enterprise Typst registry unavailable): {name}", file=sys.stderr)
+      print("/^(?:" + "|".join(re.escape(name) for names in retained.values() for name in names) + ")$/")
+      PY
+      )
+      suite_ignore=$(python - <<'PY'
+      import json
+      from pathlib import Path
+
+      configuration = json.loads(Path("deno.json").read_text())
+      excluded = configuration.get("test", {}).get("exclude", [])
+      excluded += ["packages/markspec/render/typst/mod_test.ts", "tests/e2e/doc_build_test.ts"]
+      print(",".join(excluded))
+      PY
+      )
+      deno test --frozen --allow-read --allow-write --allow-run --allow-env --allow-ffi --allow-net --ignore="$suite_ignore"
+      deno test --frozen --allow-read --allow-write --allow-run --allow-env --allow-ffi --allow-net --filter="$pdf_filter" packages/markspec/render/typst/mod_test.ts tests/e2e/doc_build_test.ts
+
+generated-contracts:
+  extends: .with-tools
+  script:
+    - bash scripts/check_tokens.sh
+    - bash scripts/check_ast_fidelity_matrix.sh
+
+compile-smoke:
+  extends: .with-tools
+  script:
+    - deno run --frozen --allow-read --allow-write --allow-run --allow-env scripts/compile_binary.ts --output dist/markspec
+    - ./dist/markspec --version
+    - ./dist/markspec --help
+    - |
+      for source_file in tests/fixtures/in-code-tsx.tsx tests/fixtures/in-code-typescript.ts; do
+        status=0
+        ./dist/markspec validate "$source_file" || status=$?
+        if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+          exit "$status"
+        fi
+      done
+    - |
+      smoke_project=$(mktemp -d)
+      printf 'name: smoke-test\nversion: 0.1.0\n' > "$smoke_project/project.yaml"
+      cp tests/fixtures/in-code-tsx.tsx "$smoke_project/component.tsx"
+      cp tests/fixtures/requirement-block.md "$smoke_project/requirements.md"
+      ./dist/markspec compile --format json "$smoke_project" > dist/smoke-project.json
+    - |
+      python - <<'PY'
+      import hashlib
+      import json
+      import os
+      from pathlib import Path
+      import subprocess
+
+      revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+      if revision != os.environ["CI_COMMIT_SHA"]:
+          raise SystemExit("Built sources differ from the pipeline commit")
+      tracked_changes = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True)
+      if tracked_changes:
+          raise SystemExit("Tracked sources changed during compilation")
+      fingerprints = {}
+      for name in ("deno.lock", "grammars/grammars.lock", "dist/markspec"):
+          fingerprints[name] = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+      tools = Path(os.environ["MIRROR_CI_TOOLS"])
+      evidence = {
+          "schema_version": 1,
+          "source_revision": revision,
+          "configuration": os.environ["CI_CONFIG_PATH"],
+          "pipeline_url": os.environ["CI_PIPELINE_URL"],
+          "platform": "linux-x86_64",
+          "sha256": fingerprints,
+          "tools": json.loads((tools / "tools.json").read_text()),
+          "version": subprocess.check_output(["./dist/markspec", "--version"], text=True).strip(),
+      }
+      Path("dist/build.json").write_text(json.dumps(evidence, indent=2) + "\n")
+      PY
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist/markspec
+      - dist/build.json
+      - dist/smoke-project.json
+
+package-vsix:
+  extends: .with-tools
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "feat/sts-markspec-integration"'
+  parallel:
+    matrix:
+      - DENO_TARGET: x86_64-unknown-linux-gnu
+        VSCE_TARGET: linux-x64
+        BINARY: markspec
+        DENORT_SHA256: ab416b7470f3f7c6d7b4363be475e5d8cf3d8469d866b3b8459a332a5874cd0d
+      - DENO_TARGET: x86_64-apple-darwin
+        VSCE_TARGET: darwin-x64
+        BINARY: markspec
+        DENORT_SHA256: 4f909123297d4921d72f70effea23b65d7ef8b9f40de6d3351d28eef7b9e884c
+      - DENO_TARGET: aarch64-apple-darwin
+        VSCE_TARGET: darwin-arm64
+        BINARY: markspec
+        DENORT_SHA256: b0a08debcba347f9bf2391ac0e12f99f27c7a375ad561baeccb35f01369acda4
+      - DENO_TARGET: x86_64-pc-windows-msvc
+        VSCE_TARGET: win32-x64
+        BINARY: markspec.exe
+        DENORT_SHA256: 1ed45440e881cbadbfa754c8dd25c70635bf3b16a5ad663f65ec3c5cc4a975fd
+  script:
+    - |
+      python - <<'PY'
+      import hashlib
+      import io
+      import os
+      from pathlib import Path
+      from urllib.request import urlopen
+      import zipfile
+
+      target = os.environ["DENO_TARGET"]
+      url = f"https://github.com/denoland/deno/releases/download/v2.9.7/denort-{target}.zip"
+      with urlopen(url, timeout=180) as response:
+          archive = response.read()
+      if hashlib.sha256(archive).hexdigest() != os.environ["DENORT_SHA256"]:
+          raise SystemExit(f"denort archive SHA-256 mismatch: {target}")
+      name = "denort.exe" if target.endswith("windows-msvc") else "denort"
+      runtime = Path(os.environ["MIRROR_CI_TOOLS"]) / "denort"
+      runtime.mkdir(parents=True, exist_ok=True)
+      with zipfile.ZipFile(io.BytesIO(archive)) as release:
+          (runtime / name).write_bytes(release.read(name))
+      (runtime / name).chmod(0o755)
+      PY
+    - export DENORT_BIN="$MIRROR_CI_TOOLS/denort/$( [ "$BINARY" = markspec.exe ] && echo denort.exe || echo denort )"
+    - deno run --frozen --allow-read --allow-write --allow-run --allow-env scripts/compile_binary.ts --target "$DENO_TARGET" --output "dist/$VSCE_TARGET/$BINARY"
+    - printf '#!/bin/sh\nexec node "%s" "$@"\n' "$MIRROR_CI_TOOLS/npm/bin/npm-cli.js" > "$MIRROR_CI_TOOLS/bin/npm"
+    - chmod +x "$MIRROR_CI_TOOLS/bin/npm"
+    - cd editors/vscode
+    - npm ci --no-audit --no-fund
+    - npm run compile
+    - deno run --frozen --config ../../deno.json --allow-read --allow-write scripts/bundleBinary.ts --source "../../dist/$VSCE_TARGET/$BINARY" --name "$BINARY"
+    - |
+      python - <<'PY'
+      import json
+      import os
+      from pathlib import Path
+      import re
+      from urllib.request import Request, urlopen
+
+      # STS-derived version: the mirror's release version, then -sts.N, where N
+      # follows the highest -sts.N already published for that release.
+      base = json.load(open("package.json"))["version"]
+      if not re.fullmatch(r"\d+\.\d+\.\d+", base):
+          raise SystemExit(f"Unexpected extension version: {base}")
+      api = f"{os.environ['CI_API_V4_URL']}/projects/{os.environ['CI_PROJECT_ID']}/packages"
+      query = f"{api}?package_type=generic&package_name=markspec-ide&per_page=100"
+      with urlopen(Request(query, headers={"JOB-TOKEN": os.environ["CI_JOB_TOKEN"]}), timeout=60) as response:
+          published = [package["version"] for package in json.load(response)]
+      pattern = re.compile(rf"{re.escape(base)}-sts\.(\d+)")
+      numbers = [int(match[1]) for version in published if (match := pattern.fullmatch(version))]
+      Path("../../dist/sts-version").write_text(f"{base}-sts.{max(numbers, default=0) + 1}\n")
+      PY
+    - export VSIX_VERSION="$(cat ../../dist/sts-version)"
+    - echo "STS-derived version $VSIX_VERSION"
+    - export VSIX_FILE="markspec-ide-$VSIX_VERSION-$(echo "$CI_COMMIT_SHA" | cut -c1-7)-$VSCE_TARGET"
+    - node -e 'const fs = require("fs"); const p = JSON.parse(fs.readFileSync("package.json")); p.version = process.env.VSIX_VERSION; fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
+    - mkdir -p ../../dist/vsix
+    - ./node_modules/.bin/vsce package --target "$VSCE_TARGET" -o "../../dist/vsix/$VSIX_FILE.vsix"
+    - git checkout -- package.json
+    - cd ../..
+    - |
+      python - <<'PY'
+      import hashlib
+      import json
+      import os
+      from pathlib import Path
+      import subprocess
+
+      revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+      if revision != os.environ["CI_COMMIT_SHA"]:
+          raise SystemExit("Built sources differ from the pipeline commit")
+      if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True):
+          raise SystemExit("Tracked sources changed during packaging")
+      target = os.environ["VSCE_TARGET"]
+      version = os.environ["VSIX_VERSION"]
+      vsix = Path(f"dist/vsix/{os.environ['VSIX_FILE']}.vsix")
+      binary = Path("dist") / target / os.environ["BINARY"]
+      tools = Path(os.environ["MIRROR_CI_TOOLS"])
+      evidence = {
+          "schema_version": 1,
+          "source_revision": revision,
+          "configuration": os.environ["CI_CONFIG_PATH"],
+          "pipeline_url": os.environ["CI_PIPELINE_URL"],
+          "vsce_target": target,
+          "deno_target": os.environ["DENO_TARGET"],
+          "version": version,
+          "upstream_version": version.split("-sts.")[0],
+          "denort": {"version": "2.9.7", "archive_sha256": os.environ["DENORT_SHA256"]},
+          "sha256": {
+              "binary": hashlib.sha256(binary.read_bytes()).hexdigest(),
+              "vsix": hashlib.sha256(vsix.read_bytes()).hexdigest(),
+              "deno.lock": hashlib.sha256(Path("deno.lock").read_bytes()).hexdigest(),
+              "editors/vscode/package-lock.json": hashlib.sha256(Path("editors/vscode/package-lock.json").read_bytes()).hexdigest(),
+          },
+          "tools": json.loads((tools / "tools.json").read_text()),
+      }
+      Path(f"dist/vsix/{os.environ['VSIX_FILE']}.json").write_text(json.dumps(evidence, indent=2) + "\n")
+      PY
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist/vsix/
+
+publish-vsix:
+  stage: publish
+  needs:
+    - job: package-vsix
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "feat/sts-markspec-integration"'
+      when: manual
+      allow_failure: true
+  script:
+    - |
+      python - <<'PY'
+      import json
+      import os
+      from pathlib import Path
+      from urllib.parse import quote
+      from urllib.request import Request, urlopen
+
+      files = sorted(Path("dist/vsix").iterdir())
+      vsix = [f for f in files if f.suffix == ".vsix"]
+      if len(vsix) != 4 or len(files) != 8:
+          raise SystemExit("Expected four VSIX and their four evidence files")
+      versions = {json.loads(f.read_text())["version"] for f in files if f.suffix == ".json"}
+      if len(versions) != 1:
+          raise SystemExit("The VSIX evidence does not share one version")
+      version = versions.pop()
+      api = f"{os.environ['CI_API_V4_URL']}/projects/{os.environ['CI_PROJECT_ID']}/packages"
+      headers = {"JOB-TOKEN": os.environ["CI_JOB_TOKEN"]}
+      query = f"{api}?package_type=generic&package_name=markspec-ide&package_version={quote(version)}"
+      with urlopen(Request(query, headers=headers), timeout=60) as response:
+          if json.load(response):
+              raise SystemExit(f"markspec-ide {version} is already published; publish a new commit instead")
+      for path in files:
+          url = f"{api}/generic/markspec-ide/{quote(version)}/{quote(path.name)}"
+          request = Request(url, data=path.read_bytes(), method="PUT", headers=headers)
+          with urlopen(request, timeout=600) as response:
+              print(f"published {path.name}: HTTP {response.status}")
+      print(f"Package registry: markspec-ide {version}")
+      PY
+
+commits:
+  extends: .with-tools
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - git-std check --range "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA"
