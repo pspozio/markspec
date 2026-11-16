@@ -350,15 +350,20 @@ profile:
   conventions:
     modal-keywords:
       casing: rfc2119   # rfc2119 | iso | preserve
+    native-content:
+      mode: preserve    # canonical | preserve
       description: "Require lowercase shall/should/may"
 ```
 
-The only recognised convention is `modal-keywords`; unknown convention names are
-accepted with a `PROFILE-LOAD-003` warning (forward compatibility). For
-`modal-keywords`, the `casing` setting must be `rfc2119`, `iso`, or `preserve`.
-With `preserve`, `markspec fmt`, the `MSL-F010` drift gate and the editor
-formatter keep the source casing of modal and EARS keywords, and `MSL-M060` does
-not warn on uppercase keywords.
+The recognised conventions are `modal-keywords` and `native-content`; unknown
+convention names are accepted with a `PROFILE-LOAD-003` warning (forward
+compatibility). For `modal-keywords`, the `casing` setting must be `rfc2119`,
+`iso`, or `preserve`; with `preserve`, `markspec fmt`, the `MSL-F010` drift gate
+and the editor formatter keep the source casing of modal and EARS keywords, and
+`MSL-M060` does not warn on uppercase keywords. For `native-content`, the `mode`
+setting must be `canonical` (the default) or `preserve`; `preserve` makes
+`markspec fmt` keep native content imported from another requirements tool as
+written (see the language specification, formatting).
 
 ## B.9 Prose lexicons (`profile.prose`)
 

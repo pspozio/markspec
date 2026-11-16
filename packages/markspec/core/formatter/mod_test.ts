@@ -25,9 +25,32 @@ import {
 const MOCK_ULID = "01HGW2Q8MNP3RSTVWXYZABCDEF";
 const MOCK_ULID_2 = "01HGW2Q8MNP3RSTVWXYZABCDEG";
 
+Deno.test("format: preserves native Unicode attribute values through parsing and reformatting", () => {
+  for (
+    const value of [
+      "\ufeffnative-value\ufeff",
+      "\ufeff",
+      "\u00a0native-value\u00a0",
+    ]
+  ) {
+    const input =
+      `- [REQ-001] Native value\n\n  The system shall preserve data.\n\n      Id: ${MOCK_ULID}\n      Foo: ${value}\n`;
+    const result = format(input);
+    assertStringIncludes(result.output, `      Foo: ${value}\n`);
+    assertEquals(format(result.output).output, result.output);
+  }
+});
+
 const PRESERVE_CONVENTIONS = new Map([
   ["modal-keywords", {
     value: { name: "modal-keywords", settings: { casing: "preserve" } },
+    origin: "@test/legacy",
+  }],
+]);
+
+const NATIVE_CONVENTIONS = new Map([
+  ["native-content", {
+    value: { name: "native-content", settings: { mode: "preserve" } },
     origin: "@test/legacy",
   }],
 ]);
@@ -71,6 +94,25 @@ Deno.test("format: other casing conventions keep the canonical casing", () => {
       "The system shall act.",
     );
   }
+});
+
+Deno.test("format: under native-content preserve, an encoded colon keeps the body", () => {
+  const md = `- [REQ-001] Literal punctuation
+
+  The opening sentence remains part of this imported paragraph.
+  The continuation must remain present and retain all its words.
+  The final sentence ends with an example
+  &#58; using punctuation and **markup**.
+
+      Id: ${MOCK_ULID}
+`;
+  const options = { conventions: NATIVE_CONVENTIONS };
+  const result = format(md, options);
+  assertEquals(result.output, md);
+  assertFalse(result.changed);
+  assertEquals(format(result.output, options).output, md);
+  // The canonical mode reads the decoded colon as a definition separator.
+  assertEquals(format(md).changed, true);
 });
 
 function mockUlid(): () => string {
@@ -769,6 +811,32 @@ Deno.test("format: formatMarkdownProse re-wraps entry bodies (gated)", () => {
   const result = format(input, { file: "t.md", formatMarkdownProse: unwrap });
   assertEquals(result.changed, true);
   assertStringIncludes(result.output, "  Ragged body prose.");
+});
+
+Deno.test("format: under native-content preserve, table code-span padding falls back without losing native spelling", async () => {
+  const { loadMarkdownFormatter } = await import("./dprint.ts");
+  const proseFormat = await loadMarkdownFormatter();
+  for (
+    const cell of [
+      "State` object delivered to listeners containing: `stateId` and `availability` (ON/OFF).",
+      "StateHandler.**initialize**()` shall seed the cache. `getStates()` returns a snapshot.",
+    ]
+  ) {
+    const input =
+      `- [STK_9003] Native table\n\n  | Section | Value |\n  | --- | --- |\n  | Output | ${cell} |\n\n      Id: ${MOCK_ULID}\n`;
+    const options = {
+      file: "requirements.md",
+      formatMarkdownProse: proseFormat,
+      conventions: NATIVE_CONVENTIONS,
+    };
+    const result = format(input, options);
+    assertEquals(result.output, input);
+    assertEquals(
+      result.diagnostics.some((finding) => finding.code === "MSL-F012"),
+      true,
+    );
+    assertEquals(format(result.output, options).output, result.output);
+  }
 });
 
 Deno.test("format: polished entry-body lines never exceed 80 columns including indent", async () => {
