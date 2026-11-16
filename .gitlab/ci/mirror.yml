@@ -154,9 +154,7 @@ test-linux:
               "compileTypst: reports error for invalid Typst",
               "compileTypst: mainFilePath lets relative paths resolve from source dir",
           ],
-          "tests/e2e/doc_build_test.ts": [
-              "doc build <file>: a Satisfies target in another file reports no MSL-L006 (#950)",
-          ],
+          "tests/e2e/doc_build_test.ts": [],
       }
       excluded = {
           "packages/markspec/render/typst/mod_test.ts": [
@@ -167,6 +165,7 @@ test-linux:
               "doc build: produces PDF from Markdown",
               "doc build: output file has PDF magic bytes",
               "doc build: --output flag writes to custom path",
+              "doc build <file>: a Satisfies target in another file reports no MSL-L006 (#950)",
           ],
       }
       for source, names in excluded.items():
@@ -174,7 +173,7 @@ test-linux:
           actual = re.findall(r'Deno\.test\(\s*"([^"]+)"', text)
           expected = names + retained[source]
           if sorted(actual) != sorted(expected) or text.count("Deno.test(") != len(actual):
-              raise SystemExit(f"PDF test inventory changed; review the five-test exclusion: {source}")
+              raise SystemExit(f"PDF test inventory changed; review the six-test exclusion: {source}")
           for name in names:
               print(f"EXCLUDED (enterprise Typst registry unavailable): {name}", file=sys.stderr)
       print("/^(?:" + "|".join(re.escape(name) for names in retained.values() for name in names) + ")$/")
@@ -191,7 +190,7 @@ test-linux:
       PY
       )
       deno test --frozen --allow-read --allow-write --allow-run --allow-env --allow-ffi --allow-net --ignore="$suite_ignore"
-      deno test --frozen --allow-read --allow-write --allow-run --allow-env --allow-ffi --allow-net --filter="$pdf_filter" packages/markspec/render/typst/mod_test.ts tests/e2e/doc_build_test.ts
+      deno test --frozen --allow-read --allow-write --allow-run --allow-env --allow-ffi --allow-net --filter="$pdf_filter" packages/markspec/render/typst/mod_test.ts
 
 generated-contracts:
   extends: .with-tools

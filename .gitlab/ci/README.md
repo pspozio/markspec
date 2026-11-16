@@ -46,7 +46,7 @@ failure is a failed job, not permission to disable TLS checks. prim, which
 formats and lints Markdown, JSON, YAML and TOML since MarkSpec 0.13, matches the
 version pinned by the upstream `scripts/install_prim.sh`.
 
-The first deployment covers Linux x86_64 only, with the five explicit PDF-test
+The first deployment covers Linux x86_64 only, with the six explicit PDF-test
 exclusions described below. It does **not** replace the upstream Windows/macOS
 test legs, PowerShell installer check, release, Pages, VSIX verification or
 grammar-update workflows. No job is allowed to fail silently, and a green Linux
@@ -105,27 +105,28 @@ HTTPS transport. This does not establish that the workstation's VPN causes the
 runner's restriction.
 
 On 2026-10-16, the workspace owner explicitly authorized excluding the affected
-tests from this mirror's CI. Only these five tests are excluded:
+tests from this mirror's CI. On 2026-11-16, they extended the authorization to
+the `doc build <file>` cross-file reference test added in MarkSpec 0.13 (#950),
+which also builds a PDF. Only these six tests are excluded:
 
 - `compileTypst: compiles with markspec-doc template`
 - `compileTypst: compiles with cmarker`
 - `doc build: produces PDF from Markdown`
 - `doc build: output file has PDF magic bytes`
 - `doc build: --output flag writes to custom path`
+- `doc build <file>: a Satisfies target in another file reports no MSL-L006 (#950)`
 
 The test sources remain unchanged. The three self-contained Typst compiler tests
-still run, as does the rest of the suite. The `doc build <file>` cross-file
-reference test added in MarkSpec 0.13 (#950) is not covered by the
-authorization: it runs in the filtered PDF step, and a failure there needs a new
-explicit decision before it is excluded. The job logs every exclusion and checks
-the complete test-name inventory of both affected modules; a new, renamed or
+still run, as does the rest of the suite; the upstream GitHub CI of the fork
+runs all six excluded tests. The job logs every exclusion and checks the
+complete test-name inventory of both affected modules; a new, renamed or
 differently registered test blocks the job until the selection is reviewed. No
 broad filename exclusion silently removes future tests.
 
 This is an explicit coverage limitation, not a successful PDF integration
 validation. It does not weaken the formatter, legacy fidelity, binary build,
 type-check, lint or other test gates. No snapshot or TLS policy changes. The
-failed archive-prefetch step is removed; restore the five tests after
+failed archive-prefetch step is removed; restore the six tests after
 establishing an authorized package-access route for the runners.
 
 Track restoration and its acceptance criteria in
