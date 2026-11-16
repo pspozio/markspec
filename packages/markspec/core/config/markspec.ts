@@ -17,6 +17,13 @@ import type {
   ProfileSpecifier,
 } from "../model/mod.ts";
 import type { ReadFile } from "./mod.ts";
+import { readLineWidth, readMarkdownLineWidth } from "./editorconfig.ts";
+import {
+  DEFAULT_MARKDOWN_STYLE,
+  type MarkdownStyle,
+  TEXT_WRAP_VALUES,
+  type TextWrap,
+} from "../formatter/dprint.ts";
 
 /** The consumer-binding config filename, placed next to `project.yaml`. */
 export const MARKSPEC_YAML_FILENAME = ".markspec.yaml";
@@ -94,6 +101,12 @@ export interface MarkspecYaml {
    * Defaults to `{}` when the key is absent or null.
    */
   readonly captionConventions: CaptionConventions;
+  /**
+   * Prose wrapping for `markspec fmt` (ADR-029 amendment). Absent when the
+   * file has no `format:` section. The line width comes from `.editorconfig`
+   * (`max_line_length`), not from `.markspec.yaml`.
+   */
+  readonly format?: { readonly textWrap: TextWrap };
 }
 
 /** Result of parsing a `.markspec.yaml` string. */
@@ -108,7 +121,18 @@ export const ALLOWED_MARKSPEC_YAML_KEYS = new Set([
   "default-profile",
   "exclude",
   "caption-conventions",
+  "format",
 ]);
+
+/** Keys of the `format:` section. */
+const FORMAT_KEYS = new Set(["text-wrap"]);
+/** A `.editorconfig` `max_line_length` MarkSpec applies: a positive integer,
+ * as prim reads it (`off` and other values keep the default width). */
+function parseLineWidth(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  const width = Number(value);
+  return width > 0 ? width : undefined;
+}
 
 /** Valid `caption-conventions` keywords (spec §4.7 MSL-C072). */
 const VALID_CAPTION_KEYWORDS = new Set([
@@ -310,6 +334,8 @@ export function parseMarkspecYaml(
     }
   }
 
+  const format = parseFormat(root.format, sourcePath, diagnostics);
+
   // If any specifier failed to parse, treat the whole file as invalid.
   const hasErrors = diagnostics.some((d) => d.severity === "error");
   if (hasErrors) {
@@ -317,9 +343,104 @@ export function parseMarkspecYaml(
   }
 
   return {
-    config: { profiles, defaultProfile, exclude, captionConventions },
+    config: {
+      profiles,
+      defaultProfile,
+      exclude,
+      captionConventions,
+      ...(format !== undefined ? { format } : {}),
+    },
     diagnostics,
   };
+}
+
+/**
+ * Parse the optional `format:` section (`text-wrap`). An omitted key takes
+ * {@linkcode DEFAULT_MARKDOWN_STYLE}; any invalid value emits
+ * `MARKSPEC-YAML-003`. `line-width` is refused with a pointer to
+ * `.editorconfig`, the single source of the line width.
+ */
+function parseFormat(
+  raw: unknown,
+  sourcePath: string,
+  diagnostics: Diagnostic[],
+): { textWrap: TextWrap } | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const error = (message: string) =>
+    diagnostics.push({
+      code: "MARKSPEC-YAML-003",
+      severity: "error",
+      message: `.markspec.yaml: ${message}`,
+      location: { file: sourcePath, line: 1, column: 1 },
+    });
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    error(
+      `'format' expected a mapping with text-wrap, got ${
+        Array.isArray(raw) ? "array" : typeof raw
+      }`,
+    );
+    return undefined;
+  }
+  const section = raw as Record<string, unknown>;
+  for (const key of Object.keys(section)) {
+    if (key === "line-width") {
+      error(
+        "'format.line-width' is not supported: set max_line_length for " +
+          "Markdown files in .editorconfig, which prim and editors read too",
+      );
+    } else if (!FORMAT_KEYS.has(key)) {
+      error(
+        `'format.${key}': unknown key; valid keys: ${
+          [...FORMAT_KEYS].join(", ")
+        }`,
+      );
+    }
+  }
+  let textWrap: TextWrap = DEFAULT_MARKDOWN_STYLE.textWrap;
+  const rawTextWrap = section["text-wrap"];
+  if (rawTextWrap !== undefined) {
+    if (!TEXT_WRAP_VALUES.includes(rawTextWrap as TextWrap)) {
+      error(
+        `'format.text-wrap' expected ${
+          TEXT_WRAP_VALUES.map((value) => JSON.stringify(value)).join(", ")
+        }, got ${JSON.stringify(rawTextWrap)}`,
+      );
+    } else {
+      textWrap = rawTextWrap as TextWrap;
+    }
+  }
+  return { textWrap };
+}
+
+/**
+ * The Markdown line width of a project: `.editorconfig` `max_line_length`
+ * for a Markdown file at `projectRoot` when it is a positive integer;
+ * otherwise (absent, `off`) the default 80. Formatting resolves the width of
+ * each file with {@linkcode markdownStyleForFile}; this value is the width of
+ * the project's own Markdown files and the fallback where no file is known.
+ */
+export async function markdownLineWidth(
+  projectRoot: string,
+  readFile: ReadFile,
+): Promise<number> {
+  const { value } = await readMarkdownLineWidth(projectRoot, readFile);
+  return parseLineWidth(value) ?? DEFAULT_MARKDOWN_STYLE.lineWidth;
+}
+
+/**
+ * `style` with the line width that `.editorconfig` gives `filePath`, the
+ * value prim and editors use for that file: a nested `.editorconfig` or a
+ * path-specific section applies. Without a `max_line_length` for the file
+ * (or with `off`), the width is the default 80.
+ */
+export async function markdownStyleForFile(
+  style: MarkdownStyle,
+  filePath: string,
+  readFile: ReadFile,
+): Promise<MarkdownStyle> {
+  const { value } = await readLineWidth(resolve(filePath), readFile);
+  const lineWidth = parseLineWidth(value) ?? DEFAULT_MARKDOWN_STYLE.lineWidth;
+  return lineWidth === style.lineWidth ? style : { ...style, lineWidth };
 }
 
 /**
@@ -474,23 +595,27 @@ export async function addProfileSpecifier(
 
 /**
  * The markspec-tool configuration read from `.markspec.yaml`: file-
- * discovery exclusions and caption-position conventions. Distinct from
+ * discovery exclusions, caption-position conventions and the Markdown
+ * prose style. Distinct from
  * {@linkcode MarkspecYaml}'s `profiles` / `defaultProfile` fields, which
  * drive profile-chain resolution rather than tool behavior.
  */
 export interface ToolConfig {
   readonly exclude: readonly string[];
   readonly captionConventions: CaptionConventions;
+  /** Prose wrapping and line width for `markspec fmt` and MSL-F010. */
+  readonly markdownStyle: MarkdownStyle;
 }
 
 /** Defaults used when `.markspec.yaml` is absent or carries neither key. */
 export const DEFAULT_TOOL_CONFIG: ToolConfig = {
   exclude: [],
   captionConventions: {},
+  markdownStyle: DEFAULT_MARKDOWN_STYLE,
 };
 
 /**
- * Load the markspec tool config (`exclude`, `caption-conventions`) from
+ * Load the markspec tool config (`exclude`, `caption-conventions`, `format`) from
  * `.markspec.yaml` at `projectRoot`.
  *
  * An absent file, or one that parses to a `null` config (a schema or YAML
@@ -502,21 +627,31 @@ export async function loadToolConfig(
   projectRoot: string,
   readFile: ReadFile,
 ): Promise<{ config: ToolConfig; diagnostics: readonly Diagnostic[] }> {
+  const lineWidth = await markdownLineWidth(projectRoot, readFile);
+  const withWidth = (config: ToolConfig): ToolConfig =>
+    lineWidth === config.markdownStyle.lineWidth ? config : {
+      ...config,
+      markdownStyle: { ...config.markdownStyle, lineWidth },
+    };
   const rawYaml = await readMarkspecYaml(projectRoot, readFile);
   if (rawYaml === null) {
-    return { config: DEFAULT_TOOL_CONFIG, diagnostics: [] };
+    return { config: withWidth(DEFAULT_TOOL_CONFIG), diagnostics: [] };
   }
 
   const sourcePath = join(projectRoot, MARKSPEC_YAML_FILENAME);
   const { config, diagnostics } = parseMarkspecYaml(rawYaml, sourcePath);
   if (config === null) {
-    return { config: DEFAULT_TOOL_CONFIG, diagnostics };
+    return { config: withWidth(DEFAULT_TOOL_CONFIG), diagnostics };
   }
   return {
-    config: {
+    config: withWidth({
       exclude: config.exclude,
       captionConventions: config.captionConventions,
-    },
+      markdownStyle: {
+        textWrap: config.format?.textWrap ?? DEFAULT_MARKDOWN_STYLE.textWrap,
+        lineWidth: DEFAULT_MARKDOWN_STYLE.lineWidth,
+      },
+    }),
     diagnostics,
   };
 }

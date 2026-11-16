@@ -50,6 +50,7 @@ import {
   isWithin,
   loadMarkdownFormatter,
   makeDisplayId,
+  markdownStyleForFile,
   parseFile,
   targetsForRelation,
   VERSION,
@@ -1620,7 +1621,24 @@ connection.onDocumentFormatting(async (params) => {
     );
     formatMarkdownProse = undefined;
   }
-  const result = format(currentText, { file: filePath, formatMarkdownProse });
+  const result = format(currentText, {
+    file: filePath,
+    formatMarkdownProse,
+    // The project's `.markspec.yaml` `format:` style and the width that
+    // `.editorconfig` gives this file, read again on every request, as
+    // `markspec fmt`.
+    markdownStyle: await markdownStyleForFile(
+      ctx.toolConfig.markdownStyle,
+      filePath,
+      async (path) => {
+        try {
+          return await Deno.readTextFile(path);
+        } catch {
+          return undefined;
+        }
+      },
+    ),
+  });
 
   // Surface Markdown-pass fallbacks (MSL-F012, info): a body or prose
   // segment whose dprint output was rejected/errored and kept as-is. The

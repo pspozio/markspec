@@ -14,6 +14,7 @@ import {
   denoDiscoveryIO,
   loadActiveProfile,
   loadMarkdownFormatterOrExit,
+  loadToolConfigOrExit,
   projectCollectOptions,
   readFile,
   resolveScope,
@@ -39,7 +40,8 @@ export const fmtCmd = new Command()
         extensions: new Set([...MARKDOWN_EXTENSIONS, ...FEATURE_EXTENSIONS]),
         quiet: options.quiet === true,
       });
-      const { format } = await import("../../core/mod.ts");
+      const { DEFAULT_MARKDOWN_STYLE, format, markdownStyleForFile } =
+        await import("../../core/mod.ts");
 
       // Load the profile of every project group before any file is written,
       // so a refused target (below) stops the run before any file changes.
@@ -91,6 +93,10 @@ export const fmtCmd = new Command()
       const resolver = await cliProjectRootResolver();
 
       for (const group of scope.groups) {
+        // The group's `.markspec.yaml` `format:` style (ADR-029 amendment).
+        const markdownStyle = group.projectRoot !== undefined
+          ? (await loadToolConfigOrExit(group.projectRoot)).markdownStyle
+          : undefined;
         // Project-aware reference canonicalisation/healing (issue #593,
         // Slice 4). Built once per project group and reused for every file
         // of the group. A group without a project root leaves refIndex
@@ -161,6 +167,14 @@ export const fmtCmd = new Command()
           const result = format(content, {
             file: filePath,
             formatMarkdownProse: isMarkdown ? formatMarkdownProse : undefined,
+            // The width `.editorconfig` gives this file, as prim reads it.
+            markdownStyle: isMarkdown
+              ? await markdownStyleForFile(
+                markdownStyle ?? DEFAULT_MARKDOWN_STYLE,
+                filePath,
+                readFile,
+              )
+              : markdownStyle,
           });
           let output = result.output;
           let changed = result.changed;

@@ -11,10 +11,12 @@ import {
   DEFAULT_TOOL_CONFIG,
   discoverMarkspecRoot,
   loadToolConfig,
+  markdownStyleForFile,
   MARKSPEC_YAML_FILENAME,
   parseMarkspecYaml,
   readMarkspecYaml,
 } from "./markspec.ts";
+import { DEFAULT_MARKDOWN_STYLE } from "../formatter/dprint.ts";
 
 function mockReadFile(map: Record<string, string>) {
   return (path: string): Promise<string | undefined> =>
@@ -434,6 +436,59 @@ Deno.test("parseMarkspecYaml: non-mapping caption-conventions emits MARKSPEC-YAM
 });
 
 // ---------------------------------------------------------------------------
+// format (ADR-029 amendment: configurable prose wrapping)
+// ---------------------------------------------------------------------------
+
+Deno.test("parseMarkspecYaml: format parses text-wrap", () => {
+  for (const textWrap of ["always", "maintain", "never"]) {
+    const result = parseMarkspecYaml(
+      `format:\n  text-wrap: ${textWrap}\n`,
+      "/p/.markspec.yaml",
+    );
+    assertEquals(result.diagnostics, []);
+    assertEquals(result.config?.format, { textWrap });
+  }
+});
+
+Deno.test("parseMarkspecYaml: an empty format section takes the default wrapping", () => {
+  const result = parseMarkspecYaml("format: {}\n", "/p/.markspec.yaml");
+  assertEquals(result.config?.format, { textWrap: "always" });
+});
+
+Deno.test("parseMarkspecYaml: absent format leaves the config unchanged", () => {
+  const result = parseMarkspecYaml("profiles: []\n", "/p/.markspec.yaml");
+  assertEquals(result.config?.format, undefined);
+  assertEquals("format" in (result.config ?? {}), false);
+});
+
+Deno.test("parseMarkspecYaml: format.line-width points to .editorconfig", () => {
+  const result = parseMarkspecYaml(
+    "format:\n  line-width: 100\n",
+    "/p/.markspec.yaml",
+  );
+  assertEquals(result.config, null);
+  assertEquals(result.diagnostics[0].code, "MARKSPEC-YAML-003");
+  assertStringIncludes(result.diagnostics[0].message, "max_line_length");
+  assertStringIncludes(result.diagnostics[0].message, ".editorconfig");
+});
+
+Deno.test("parseMarkspecYaml: invalid format values emit MARKSPEC-YAML-003", () => {
+  for (
+    const [yaml, expected] of [
+      ["format:\n  text-wrap: sometimes\n", "'format.text-wrap' expected"],
+      ["format:\n  wrap: never\n", "'format.wrap': unknown key"],
+      ["format: never\n", "'format' expected a mapping"],
+      ["format:\n  - never\n", "got array"],
+    ] as const
+  ) {
+    const result = parseMarkspecYaml(yaml, "/p/.markspec.yaml");
+    assertEquals(result.config, null, yaml);
+    assertEquals(result.diagnostics[0].code, "MARKSPEC-YAML-003", yaml);
+    assertStringIncludes(result.diagnostics[0].message, expected, yaml);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // loadToolConfig
 // ---------------------------------------------------------------------------
 
@@ -462,6 +517,69 @@ Deno.test("loadToolConfig: reads exclude + captionConventions", async () => {
   assertEquals(result.diagnostics, []);
 });
 
+Deno.test("loadToolConfig: reads the format style, default when absent", async () => {
+  const project = resolve("/proj");
+  const read = (yaml: string) => (path: string) =>
+    Promise.resolve(
+      path === join(project, MARKSPEC_YAML_FILENAME) ? yaml : undefined,
+    );
+  const configured = await loadToolConfig(
+    project,
+    read("format:\n  text-wrap: maintain\n"),
+  );
+  assertEquals(configured.config.markdownStyle, {
+    textWrap: "maintain",
+    lineWidth: 80,
+  });
+  const absent = await loadToolConfig(project, read("profiles: []\n"));
+  assertEquals(absent.config.markdownStyle, DEFAULT_MARKDOWN_STYLE);
+});
+
+Deno.test("loadToolConfig: the line width comes from .editorconfig max_line_length", async () => {
+  const project = resolve("/proj");
+  const files =
+    (editorconfig: string, yaml = "format:\n  text-wrap: always\n") =>
+    (path: string) =>
+      Promise.resolve(
+        path === join(project, MARKSPEC_YAML_FILENAME)
+          ? yaml
+          : path === join(project, ".editorconfig")
+          ? editorconfig
+          : undefined,
+      );
+  const width = async (editorconfig: string, yaml?: string) =>
+    (await loadToolConfig(project, files(editorconfig, yaml))).config
+      .markdownStyle.lineWidth;
+  assertEquals(
+    await width("root = true\n[*.md]\nmax_line_length = 100\n"),
+    100,
+  );
+  assertEquals(
+    await width(
+      "root = true\n[*]\nmax_line_length = 120\n[*.md]\nmax_line_length = 100\n",
+    ),
+    100,
+  );
+  assertEquals(await width("root = true\n[*.ts]\nmax_line_length = 120\n"), 80);
+  assertEquals(await width("root = true\n[*.md]\nmax_line_length = off\n"), 80);
+  assertEquals(await width("root = true\n[*.md]\nmax_line_length = 5\n"), 5);
+  assertEquals(
+    await width("root = true\n[*.md]\nmax_line_length = 0x50\n"),
+    80,
+  );
+  // Without .markspec.yaml, the width still follows .editorconfig.
+  const bare = await loadToolConfig(project, (path) =>
+    Promise.resolve(
+      path === join(project, ".editorconfig")
+        ? "root = true\n[*.{md,markdown}]\nmax_line_length = 90\n"
+        : undefined,
+    ));
+  assertEquals(bare.config.markdownStyle, {
+    textWrap: "always",
+    lineWidth: 90,
+  });
+});
+
 Deno.test("loadToolConfig: malformed .markspec.yaml yields defaults + error diagnostics", async () => {
   const project = resolve("/proj");
   const yaml = "exclude: nope\n";
@@ -476,5 +594,32 @@ Deno.test("loadToolConfig: malformed .markspec.yaml yields defaults + error diag
   assertEquals(
     result.diagnostics.some((d) => d.severity === "error"),
     true,
+  );
+});
+
+Deno.test("markdownStyleForFile: the width follows .editorconfig for each file", async () => {
+  const root = resolve("/proj");
+  const read = (path: string) =>
+    Promise.resolve(
+      path === join(root, ".editorconfig")
+        ? "root = true\n[*.md]\nmax_line_length = 100\n"
+        : path === join(root, "docs", ".editorconfig")
+        ? "[*.md]\nmax_line_length = 120\n"
+        : undefined,
+    );
+  const style = { textWrap: "always" as const, lineWidth: 80 };
+  assertEquals(
+    (await markdownStyleForFile(style, join(root, "a.md"), read)).lineWidth,
+    100,
+  );
+  assertEquals(
+    (await markdownStyleForFile(style, join(root, "docs", "b.md"), read))
+      .lineWidth,
+    120,
+  );
+  assertEquals(
+    (await markdownStyleForFile(style, join(resolve("/other"), "c.md"), read))
+      .lineWidth,
+    80,
   );
 });

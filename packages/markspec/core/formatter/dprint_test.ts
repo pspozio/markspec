@@ -59,3 +59,23 @@ Deno.test("loadMarkdownFormatter: per-call lineWidth override narrows the wrap",
     throw new Error("narrower width should produce more lines");
   }
 });
+
+Deno.test("loadMarkdownFormatter: per-call textWrap override selects the wrapping", async () => {
+  const fmt = await loadMarkdownFormatter();
+  const input = "A short first line\nand a second line " + "word ".repeat(20) +
+    "end.\n";
+  const always = fmt(input, { textWrap: "always" });
+  const maintain = fmt(input, { textWrap: "maintain" });
+  const never = fmt(input, { textWrap: "never" });
+  assertEquals(always.split("\n").every((line) => line.length <= 80), true);
+  assertEquals(maintain, input);
+  assertEquals(never.trimEnd().split("\n").length, 1);
+  for (
+    const [textWrap, output] of [["always", always], ["maintain", maintain], [
+      "never",
+      never,
+    ]] as const
+  ) {
+    assertEquals(fmt(output, { textWrap }), output, `idempotent: ${textWrap}`);
+  }
+});

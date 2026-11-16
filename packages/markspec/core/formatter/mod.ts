@@ -52,7 +52,8 @@ import {
   tabMarkers,
 } from "./tab_markers.ts";
 import {
-  MARKSPEC_MARKDOWN_GLOBAL_CONFIG,
+  DEFAULT_MARKDOWN_STYLE,
+  type MarkdownStyle,
   type ProseFormatter,
 } from "./dprint.ts";
 import { markdownSemanticallyEquivalent } from "./md_equiv.ts";
@@ -230,6 +231,7 @@ function emitBodyViaAst(
   diagnostics: Diagnostic[],
   cachedEntries: Entry[] | undefined,
   proseFormat: ProseFormatter | undefined,
+  lineWidth: number,
 ): boolean {
   // When the caller supplies pre-parsed entries whose line numbers are still
   // valid in `lines` (i.e., no line-count-changing operations occurred before
@@ -290,7 +292,14 @@ function emitBodyViaAst(
         );
       }
       const nestedDiagnostics: Diagnostic[] = [];
-      emitBodyViaAst(fragment, file, nestedDiagnostics, undefined, proseFormat);
+      emitBodyViaAst(
+        fragment,
+        file,
+        nestedDiagnostics,
+        undefined,
+        proseFormat,
+        lineWidth,
+      );
       for (const { token, original } of replacements) {
         const at = fragment.findIndex((line) => line.trim() === token);
         if (at < 0) throw new Error("Preserved child placeholder was lost");
@@ -389,7 +398,7 @@ function emitBodyViaAst(
         polished = proseFormat(emittedBody, {
           lineWidth: Math.max(
             20,
-            MARKSPEC_MARKDOWN_GLOBAL_CONFIG.lineWidth - indent,
+            lineWidth - indent,
           ),
         }).replace(/\n$/, "");
       } catch {
@@ -485,6 +494,13 @@ export interface FormatOptions {
    * must therefore pass a `.md`-suffixed `file`.
    */
   readonly formatMarkdownProse?: ProseFormatter;
+  /**
+   * The project's prose wrapping and line width (`.markspec.yaml`
+   * `format:`, ADR-029 amendment), applied to every
+   * {@linkcode formatMarkdownProse} call. Defaults to
+   * {@linkcode DEFAULT_MARKDOWN_STYLE}.
+   */
+  readonly markdownStyle?: MarkdownStyle;
 }
 
 /** Result of a format operation. */
@@ -716,7 +732,19 @@ function formatEntries(
   // gate cannot catch that class, so it must be prevented, not detected. The
   // CLI/LSP call-site guards remain as defense-in-depth.
   const isMarkdownFile = MARKDOWN_EXTENSIONS.has(extname(file).toLowerCase());
-  const proseFormat = isMarkdownFile ? options?.formatMarkdownProse : undefined;
+  const style = options?.markdownStyle ?? DEFAULT_MARKDOWN_STYLE;
+  const markdownProse = isMarkdownFile
+    ? options?.formatMarkdownProse
+    : undefined;
+  // Every prose call carries the project style; the entry-body pass narrows
+  // the width by the body indent.
+  const proseFormat: ProseFormatter | undefined = markdownProse === undefined
+    ? undefined
+    : (markdown, callOptions) =>
+      markdownProse(markdown, {
+        textWrap: style.textWrap,
+        lineWidth: callOptions?.lineWidth ?? style.lineWidth,
+      });
   if (entries.length === 0 && !fm.hadFrontMatter && proseFormat === undefined) {
     // No entries and no front matter — nothing to format. Returning the
     // original `markdown` preserves the source's exact byte sequence,
@@ -966,6 +994,7 @@ function formatEntries(
       diagnostics,
       changed ? undefined : entries,
       proseFormat,
+      style.lineWidth,
     )
   ) changed = true;
 

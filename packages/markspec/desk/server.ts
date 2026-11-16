@@ -18,6 +18,7 @@
 
 import { resolve } from "@std/path";
 import { encodeBase64Url } from "@std/encoding/base64url";
+import { loadToolConfig } from "../core/mod.ts";
 import { createProject, defaultEnv } from "../mcp/project.ts";
 import { createDeskHandler, DESK_API_VERSION } from "./api.ts";
 import { writeTextFileAtomic } from "./write.ts";
@@ -76,6 +77,16 @@ export async function startDeskServer(
     Deno.exit(1);
   }
   const projectRoot = project.projectRoot;
+  // The `.markspec.yaml` `format:` style applied to formatted proposals. A
+  // malformed file falls back to the default style; `fmt` and `check`
+  // report its errors.
+  const toolConfig = (await loadToolConfig(projectRoot, async (path) => {
+    try {
+      return await Deno.readTextFile(path);
+    } catch {
+      return undefined;
+    }
+  })).config;
 
   const token = generateToken();
   const handler = createDeskHandler({
@@ -85,6 +96,7 @@ export async function startDeskServer(
       projectRoot,
       projectName: project.config?.name,
       profile: project.profile,
+      markdownStyle: toolConfig.markdownStyle,
       getCompiled: () => project.getCompiled(),
       readFile: async (path) => {
         try {

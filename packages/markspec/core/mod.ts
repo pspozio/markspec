@@ -142,6 +142,7 @@ export {
   DEFAULT_TOOL_CONFIG,
   discoverMarkspecRoot,
   loadToolConfig,
+  markdownStyleForFile,
   MARKSPEC_YAML_FILENAME,
   parseMarkspecYaml,
   readMarkspecYaml,
@@ -275,11 +276,18 @@ export type {
   EntryBodyRefusal,
 } from "./formatter/entry_body.ts";
 export {
+  DEFAULT_MARKDOWN_STYLE,
   loadMarkdownFormatter,
   MARKSPEC_MARKDOWN_GLOBAL_CONFIG,
   MARKSPEC_MARKDOWN_PLUGIN_CONFIG,
+  TEXT_WRAP_VALUES,
 } from "./formatter/dprint.ts";
-export type { ProseFormatOptions, ProseFormatter } from "./formatter/dprint.ts";
+export type {
+  MarkdownStyle,
+  ProseFormatOptions,
+  ProseFormatter,
+  TextWrap,
+} from "./formatter/dprint.ts";
 
 // Validator
 export {

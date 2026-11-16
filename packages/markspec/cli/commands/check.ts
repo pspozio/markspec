@@ -7,17 +7,20 @@
 import { extname, join } from "@std/path";
 import { Command } from "@cliffy/command";
 import {
+  DEFAULT_MARKDOWN_STYLE,
   deriveUpstreamId,
   FEATURE_EXTENSIONS,
   loadConfig,
   loadToolConfig,
   MARKDOWN_EXTENSIONS,
+  markdownStyleForFile,
   upstreamCacheRoot,
 } from "../../core/mod.ts";
 import type {
   CaptionConventions,
   DeliveredDocument,
   Diagnostic,
+  MarkdownStyle,
 } from "../../core/mod.ts";
 import {
   loadActiveProfile,
@@ -108,6 +111,7 @@ async function checkGroup(
   // a bad caption-conventions block silently disabling MSL-C072 would be
   // invisible debt (M-1 fix).
   let captionConventions: CaptionConventions = {};
+  let markdownStyle: MarkdownStyle | undefined;
   if (projectRoot !== undefined) {
     const toolConfigResult = await loadToolConfig(projectRoot, readFile);
     const toolConfigErrors = toolConfigResult.diagnostics.filter(
@@ -120,6 +124,7 @@ async function checkGroup(
       Deno.exit(1);
     }
     captionConventions = toolConfigResult.config.captionConventions;
+    markdownStyle = toolConfigResult.config.markdownStyle;
   }
 
   // Read + parse markspec.lock once, project-wide only, BEFORE
@@ -294,6 +299,13 @@ async function checkGroup(
       allEntries,
       ledger,
       formatMarkdownProse,
+      // Each file's width comes from `.editorconfig`, as `markspec fmt`.
+      (file) =>
+        markdownStyleForFile(
+          markdownStyle ?? DEFAULT_MARKDOWN_STYLE,
+          file,
+          readFile,
+        ),
     );
 
     if (

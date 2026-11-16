@@ -37,6 +37,18 @@
         "enum": ["Figure", "Table", "Listing", "Feature", "Equation", "List"]
       },
       "additionalProperties": { "enum": ["above", "below"] }
+    },
+    "format": {
+      "type": ["object", "null"],
+      "description": "Prose style of markspec fmt (ADR-029 amendment). Null or an empty YAML key uses the default style.",
+      "additionalProperties": false,
+      "properties": {
+        "text-wrap": {
+          "enum": ["always", "maintain", "never"],
+          "default": "always",
+          "description": "always hard-wraps prose at the .editorconfig max_line_length of Markdown files (80 when unset); maintain keeps the author's line breaks; never puts each paragraph on one line."
+        }
+      }
     }
   }
 }

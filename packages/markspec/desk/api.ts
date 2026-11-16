@@ -83,6 +83,7 @@ import {
   isCorpusEntry,
   loadMarkdownFormatter,
   makeDisplayId,
+  type MarkdownStyle,
   type ProseFormatter,
 } from "../core/mod.ts";
 import { createSerialRunner } from "../lsp/util.ts";
@@ -200,6 +201,8 @@ export interface DeskSource {
   readonly projectName?: string;
   /** Active effective profile, used to resolve each type's core kind. */
   readonly profile?: EffectiveProfile;
+  /** The project's `.markspec.yaml` `format:` style, applied when a proposal is formatted. */
+  readonly markdownStyle?: MarkdownStyle;
   /** Current compiled graph. Called once per request. */
   getCompiled(): Promise<CompileResult>;
   /** Read a file by absolute path; `undefined` when it cannot be read. */
@@ -737,6 +740,8 @@ export function createDeskHandler(
         entry.displayId,
         change.body,
         formatProse,
+        undefined,
+        source.markdownStyle,
       );
       if (!outcome.ok) return refusalResponse(outcome.refusal);
       const body: ProposalPreview = {
@@ -757,6 +762,8 @@ export function createDeskHandler(
       entry.displayId,
       change.body,
       formatProse,
+      undefined,
+      source.markdownStyle,
     );
     if (!outcome.ok) return refusalResponse(outcome.refusal);
     // The pipeline formats the whole file, which takes time on a large

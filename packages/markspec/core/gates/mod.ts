@@ -23,7 +23,7 @@ import { isCorpusEntry } from "../model/mod.ts";
 import { extname } from "@std/path";
 import { format } from "../formatter/mod.ts";
 import { formatFeatureText } from "../formatter/feature_file.ts";
-import type { ProseFormatter } from "../formatter/dprint.ts";
+import type { MarkdownStyle, ProseFormatter } from "../formatter/dprint.ts";
 import { parseFile } from "../parser/mod.ts";
 import { buildRefIndex, canonicalizeRefs } from "../refs/mod.ts";
 import {
@@ -62,6 +62,9 @@ export async function fmtDriftGate(
   entries: readonly Entry[],
   ledger: readonly LockEdge[],
   formatMarkdownProse: ProseFormatter | undefined,
+  markdownStyle?:
+    | MarkdownStyle
+    | ((file: string) => Promise<MarkdownStyle>),
 ): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   // Corpus-blind by design (ADR-030): `markspec fmt` never loads the delivered
@@ -89,6 +92,9 @@ export async function fmtDriftGate(
     const formatted = format(content, {
       file: filePath,
       formatMarkdownProse,
+      markdownStyle: typeof markdownStyle === "function"
+        ? await markdownStyle(filePath)
+        : markdownStyle,
     });
     if (formatted.changed) {
       diagnostics.push({

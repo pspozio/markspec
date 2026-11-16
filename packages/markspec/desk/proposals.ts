@@ -30,6 +30,7 @@ import {
   type Diagnostic,
   type EntryBodyRefusal,
   format,
+  type MarkdownStyle,
   type ProseFormatter,
   readEntryBody,
   replaceEntryBody,
@@ -119,6 +120,7 @@ export type DocumentFormatter = (
   options: {
     readonly file: string;
     readonly formatMarkdownProse: ProseFormatter;
+    readonly markdownStyle?: MarkdownStyle;
   },
 ) => { readonly output: string; readonly diagnostics: readonly Diagnostic[] };
 
@@ -132,11 +134,13 @@ function formatText(
   file: string,
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter,
+  markdownStyle: MarkdownStyle | undefined,
 ): { output: string; diagnostics: readonly Diagnostic[] } | undefined {
   try {
     const result = formatDocument(text, {
       file,
       formatMarkdownProse: formatProse,
+      markdownStyle,
     });
     return { output: result.output, diagnostics: result.diagnostics };
   } catch {
@@ -203,6 +207,7 @@ async function checkProposal(
   formatProse: ProseFormatter,
   withCurrent: boolean,
   formatDocument: DocumentFormatter,
+  markdownStyle: MarkdownStyle | undefined,
 ): Promise<ProposalOutcome<CheckedProposal>> {
   if (proposed.length > MAX_PROPOSAL_CHARS) {
     return refuse("proposal-too-large");
@@ -219,6 +224,7 @@ async function checkProposal(
     file,
     formatProse,
     formatDocument,
+    markdownStyle,
   );
   if (
     formattedCandidate === undefined ||
@@ -240,6 +246,7 @@ async function checkProposal(
       file,
       formatProse,
       formatDocument,
+      markdownStyle,
     );
     if (formattedCurrent === undefined) return refuse("format-failed");
     const formattedBody = await readEntryBody(
@@ -268,6 +275,7 @@ async function checkProposal(
  * @param proposed - Proposed body, as the assistant returned it.
  * @param formatProse - The Markdown prose formatter (`loadMarkdownFormatter()`).
  * @param formatDocument - Test seam (internal); defaults to {@linkcode format}.
+ * @param markdownStyle - The project's `.markspec.yaml` `format:` style.
  */
 export async function previewBody(
   text: string,
@@ -276,6 +284,7 @@ export async function previewBody(
   proposed: string,
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter = format,
+  markdownStyle?: MarkdownStyle,
 ): Promise<ProposalOutcome<BodyPreview>> {
   const checked = await checkProposal(
     text,
@@ -285,6 +294,7 @@ export async function previewBody(
     formatProse,
     true,
     formatDocument,
+    markdownStyle,
   );
   if (!checked.ok) return checked;
   const { body, currentBody } = checked.value;
@@ -316,6 +326,7 @@ export async function applyBody(
   proposed: string,
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter = format,
+  markdownStyle?: MarkdownStyle,
 ): Promise<ProposalOutcome<string>> {
   const checked = await checkProposal(
     text,
@@ -325,6 +336,7 @@ export async function applyBody(
     formatProse,
     false,
     formatDocument,
+    markdownStyle,
   );
   if (!checked.ok) return checked;
   return { ok: true, value: checked.value.text };

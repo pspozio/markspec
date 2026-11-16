@@ -2,9 +2,10 @@
  * @module formatter/dprint
  *
  * Loader for the embedded dprint-markdown WASM plugin (ADR-029).
- * `markspec fmt` formats whole Markdown documents with one canonical,
- * zero-config style; this module owns that style and the (cached)
- * WASM instantiation. Dynamic imports keep the plugin off every code
+ * `markspec fmt` formats whole Markdown documents with one canonical
+ * style; this module owns that style and the (cached) WASM
+ * instantiation. Only the prose wrapping is configurable per project
+ * (`.markspec.yaml` `format:`, see {@linkcode MarkdownStyle}). Dynamic imports keep the plugin off every code
  * path except formatting (`fmt`, the `check` MSL-F010 drift gate, LSP
  * documentFormatting).
  *
@@ -21,6 +22,35 @@
  * smoke test placed elsewhere.
  */
 
+/**
+ * How prose is wrapped (ADR-029 amendment): `always` hard-wraps at the
+ * line width, `maintain` keeps the author's line breaks, `never` puts each
+ * paragraph on one line. Hard breaks (a trailing backslash) survive every
+ * value.
+ */
+export type TextWrap = "always" | "maintain" | "never";
+
+/** The accepted {@linkcode TextWrap} values, in documentation order. */
+export const TEXT_WRAP_VALUES: readonly TextWrap[] = Object.freeze([
+  "always",
+  "maintain",
+  "never",
+]);
+
+/** The project-configurable part of the Markdown style. */
+export interface MarkdownStyle {
+  /** Prose wrapping. */
+  readonly textWrap: TextWrap;
+  /** Target width in columns; only `always` wraps to it. */
+  readonly lineWidth: number;
+}
+
+/** The style used when `.markspec.yaml` has no `format:` section. */
+export const DEFAULT_MARKDOWN_STYLE: MarkdownStyle = Object.freeze({
+  textWrap: "always",
+  lineWidth: 80,
+});
+
 /** Per-call options for a {@linkcode ProseFormatter}. */
 export interface ProseFormatOptions {
   /** Override the effective line width for this fragment. Used by the
@@ -28,6 +58,8 @@ export interface ProseFormatOptions {
    * afterwards, so the budget must shrink by the indent width to stay
    * in agreement with a whole-file dprint view of the same content. */
   readonly lineWidth?: number;
+  /** Override the prose wrapping for this fragment. */
+  readonly textWrap?: TextWrap;
 }
 
 /** Formats a Markdown fragment to the canonical MarkSpec style. */
@@ -37,8 +69,9 @@ export type ProseFormatter = (
 ) => string;
 
 /**
- * The fixed MarkSpec Markdown style (ADR-029). Zero configuration by
- * design — one canonical form across every project. `newLineKind` is
+ * The canonical MarkSpec Markdown style (ADR-029). Only the prose wrapping
+ * and line width vary per project ({@linkcode MarkdownStyle}, passed per
+ * call); these values are the defaults. `newLineKind` is
  * "lf" because `format()` operates on a pure-LF buffer and re-applies
  * the file's detected line ending on output.
  */
@@ -105,8 +138,16 @@ async function instantiate(): Promise<ProseFormatter> {
     formatter.formatText({
       filePath: "fragment.md",
       fileText: markdown,
-      overrideConfig: options?.lineWidth !== undefined
-        ? { lineWidth: options.lineWidth }
-        : undefined,
+      overrideConfig: overrides(options),
     });
+}
+
+/** The dprint configuration overrides of one call, or `undefined` for none. */
+function overrides(
+  options: ProseFormatOptions | undefined,
+): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  if (options?.lineWidth !== undefined) result.lineWidth = options.lineWidth;
+  if (options?.textWrap !== undefined) result.textWrap = options.textWrap;
+  return Object.keys(result).length > 0 ? result : undefined;
 }

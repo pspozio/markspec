@@ -169,21 +169,23 @@ collides.
 ### .markspec.yaml
 
 `.markspec.yaml` carries markspec's own tool configuration: profile binding
-(covered in the [Profile guide](profiles.md)) plus two file-discovery /
-rendering settings that used to live in `project.yaml`:
+(covered in the [Profile guide](profiles.md)), two file-discovery / rendering
+settings that used to live in `project.yaml`, and the prose style of
+`markspec fmt`:
 
 | Field                 | Type                      | Default | Description                                                                                                                                                      |
 | --------------------- | ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `exclude`             | string[]                  | `[]`    | Gitignore-syntax patterns excluded from project-wide file discovery (bare `check`/`lint`/`fmt`), anchored at the project root. Applied after `.gitignore` rules. |
 | `caption-conventions` | map<string, above\|below> | `{}`    | Per-keyword caption-position convention (`Figure`, `Table`, `Listing`, `Feature`, `Equation`, `List`) enforced by `MSL-C072`.                                    |
+| `format`              | map                       | —       | Prose style of `markspec fmt`: `text-wrap` (`always`, `maintain` or `never`, default `always`). The line width comes from `.editorconfig`. See below.            |
 
 Each `exclude:` pattern must be a non-empty string. Editor validation and
 autocomplete use the
 [`.markspec.yaml` schema](https://driftsys.github.io/markspec/schemas/markspec/v1.json).
 `project.yaml` rejects `exclude:`; configure it in `.markspec.yaml`.
 
-For `exclude:` and `caption-conventions:`, `null` or an empty YAML key uses the
-default empty list or mapping.
+For `exclude:`, `caption-conventions:` and `format:`, `null` or an empty YAML
+key uses the default empty list, mapping or style.
 
 **`exclude:` example** — skip a directory of example entry blocks that aren't
 real requirements, plus a generated-file pattern:
@@ -238,6 +240,41 @@ caption-conventions:
   Table: above
   Figure: below
 ```
+
+**`format:` example** — keep each paragraph on one line, as in a requirements
+tool that stores a paragraph per line, so that editing a word changes only that
+line in a diff:
+
+```yaml
+# .markspec.yaml
+format:
+  text-wrap: never
+```
+
+`text-wrap: always` (the default) hard-wraps prose at the line width. `maintain`
+keeps the author's line breaks and wraps nothing. `never` joins each paragraph
+and list item onto one line. In every case hard breaks (a trailing `\`), tables,
+code and trailers are kept, `fmt` stays idempotent, and the `check` drift gate
+(`MSL-F010`) applies the same style. The LSP formats with the same style.
+
+The line width is the `.editorconfig` `max_line_length` that applies to each
+formatted file, resolved per file as prim and editors do (a nested
+`.editorconfig` or a path-specific section applies); without one, or with `off`,
+it is 80. It only affects `always`. `.markspec.yaml` has no width key, so one
+setting drives every formatter of the repository. A generic `[*]` section
+applies to Markdown too, so set `[*.md]` when code and prose need different
+widths:
+
+```ini
+# .editorconfig
+[*.md]
+max_line_length = 100
+```
+
+`maintain` and `never` have no prim equivalent: prim wraps Markdown to
+`max_line_length`, so a repository that also runs `prim fmt` must exclude the
+files formatted with these modes from prim, in `.primignore`, or the two
+formatters rewrap each other's output.
 
 See the [Profile guide](profiles.md) for the profile-binding keys (`profiles:`,
 `default-profile:`) this file also carries.
@@ -343,13 +380,14 @@ header, or one that does not parse, is left unchanged (see
 
 **Whole-document formatting (ADR-029).** Beyond entry-block mechanics, `fmt`
 formats the entire Markdown document — headings, lists, tables, and prose —
-through an embedded dprint-markdown plugin, with one fixed, zero-config style:
-80-column line width, always-wrap prose, underscore emphasis, asterisk strong,
-dash bullet lists, and the file's own line-ending convention preserved.
+through an embedded dprint-markdown plugin, with one canonical style: underscore
+emphasis, asterisk strong, dash bullet lists, the file's own line-ending
+convention preserved, and prose wrapped as the project's `.markspec.yaml`
+`format:` selects — by default hard-wrapped at 80 columns (`text-wrap: always`).
 
-- **80 columns is a soft target, not a hard cap.** Table rows, links and
+- **The line width is a soft target, not a hard cap.** Table rows, links and
   reference definitions, and inline code spans are never split to fit — they may
-  exceed 80 columns when they can't be broken.
+  exceed the width when they can't be broken.
 - **`<!-- dprint-ignore -->` and `<!-- dprint-ignore-start/end -->`** work as a
   per-block opt-out, same as external dprint. An ignore-start/end pair MUST NOT
   span an entry block — entry blocks and surrounding prose format as separate
