@@ -1638,6 +1638,8 @@ connection.onDocumentFormatting(async (params) => {
         }
       },
     ),
+    // The profile's casing conventions, as `markspec fmt`.
+    conventions: ctx.profile?.conventions,
   });
 
   // Surface Markdown-pass fallbacks (MSL-F012, info): a body or prose

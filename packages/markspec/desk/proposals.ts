@@ -28,6 +28,7 @@
 
 import {
   type Diagnostic,
+  type EffectiveProfile,
   type EntryBodyRefusal,
   format,
   type MarkdownStyle,
@@ -121,6 +122,7 @@ export type DocumentFormatter = (
     readonly file: string;
     readonly formatMarkdownProse: ProseFormatter;
     readonly markdownStyle?: MarkdownStyle;
+    readonly conventions?: EffectiveProfile["conventions"];
   },
 ) => { readonly output: string; readonly diagnostics: readonly Diagnostic[] };
 
@@ -135,12 +137,14 @@ function formatText(
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter,
   markdownStyle: MarkdownStyle | undefined,
+  conventions: EffectiveProfile["conventions"] | undefined,
 ): { output: string; diagnostics: readonly Diagnostic[] } | undefined {
   try {
     const result = formatDocument(text, {
       file,
       formatMarkdownProse: formatProse,
       markdownStyle,
+      ...(conventions === undefined ? {} : { conventions }),
     });
     return { output: result.output, diagnostics: result.diagnostics };
   } catch {
@@ -208,6 +212,7 @@ async function checkProposal(
   withCurrent: boolean,
   formatDocument: DocumentFormatter,
   markdownStyle: MarkdownStyle | undefined,
+  conventions: EffectiveProfile["conventions"] | undefined,
 ): Promise<ProposalOutcome<CheckedProposal>> {
   if (proposed.length > MAX_PROPOSAL_CHARS) {
     return refuse("proposal-too-large");
@@ -225,6 +230,7 @@ async function checkProposal(
     formatProse,
     formatDocument,
     markdownStyle,
+    conventions,
   );
   if (
     formattedCandidate === undefined ||
@@ -247,6 +253,7 @@ async function checkProposal(
       formatProse,
       formatDocument,
       markdownStyle,
+      conventions,
     );
     if (formattedCurrent === undefined) return refuse("format-failed");
     const formattedBody = await readEntryBody(
@@ -276,6 +283,8 @@ async function checkProposal(
  * @param formatProse - The Markdown prose formatter (`loadMarkdownFormatter()`).
  * @param formatDocument - Test seam (internal); defaults to {@linkcode format}.
  * @param markdownStyle - The project's `.markspec.yaml` `format:` style.
+ * @param conventions - The profile conventions (`modal-keywords.casing`), as
+ *   `markspec fmt` applies them.
  */
 export async function previewBody(
   text: string,
@@ -285,6 +294,7 @@ export async function previewBody(
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter = format,
   markdownStyle?: MarkdownStyle,
+  conventions?: EffectiveProfile["conventions"],
 ): Promise<ProposalOutcome<BodyPreview>> {
   const checked = await checkProposal(
     text,
@@ -295,6 +305,7 @@ export async function previewBody(
     true,
     formatDocument,
     markdownStyle,
+    conventions,
   );
   if (!checked.ok) return checked;
   const { body, currentBody } = checked.value;
@@ -327,6 +338,7 @@ export async function applyBody(
   formatProse: ProseFormatter,
   formatDocument: DocumentFormatter = format,
   markdownStyle?: MarkdownStyle,
+  conventions?: EffectiveProfile["conventions"],
 ): Promise<ProposalOutcome<string>> {
   const checked = await checkProposal(
     text,
@@ -337,6 +349,7 @@ export async function applyBody(
     false,
     formatDocument,
     markdownStyle,
+    conventions,
   );
   if (!checked.ok) return checked;
   return { ok: true, value: checked.value.text };

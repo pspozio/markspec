@@ -307,6 +307,7 @@ async function checkGroup(
           file,
           readFile,
         ),
+      chain?.effective.conventions,
     );
 
     if (

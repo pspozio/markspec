@@ -65,6 +65,7 @@ export async function fmtDriftGate(
   markdownStyle?:
     | MarkdownStyle
     | ((file: string) => Promise<MarkdownStyle>),
+  conventions?: EffectiveProfile["conventions"],
 ): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   // Corpus-blind by design (ADR-030): `markspec fmt` never loads the delivered
@@ -95,6 +96,7 @@ export async function fmtDriftGate(
       markdownStyle: typeof markdownStyle === "function"
         ? await markdownStyle(filePath)
         : markdownStyle,
+      conventions,
     });
     if (formatted.changed) {
       diagnostics.push({

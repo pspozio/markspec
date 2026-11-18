@@ -93,7 +93,7 @@ export const fmtCmd = new Command()
       let hasErrors = false;
       const resolver = await cliProjectRootResolver();
 
-      for (const group of scope.groups) {
+      for (const [index, group] of scope.groups.entries()) {
         // The group's `.markspec.yaml` `format:` style (ADR-029 amendment).
         const markdownStyle = group.projectRoot !== undefined
           ? (await loadToolConfigOrExit(group.projectRoot)).markdownStyle
@@ -167,6 +167,8 @@ export const fmtCmd = new Command()
           );
           const result = format(content, {
             file: filePath,
+            // The casing conventions of this group's own profile (#845).
+            conventions: chains[index]?.effective.conventions,
             formatMarkdownProse: isMarkdown ? formatMarkdownProse : undefined,
             // The width `.editorconfig` gives this file, as prim reads it.
             markdownStyle: isMarkdown

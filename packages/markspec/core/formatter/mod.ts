@@ -13,6 +13,7 @@ import type {
   Attribute,
   Diagnostic,
   DocumentAttributes,
+  EffectiveProfile,
   Entry,
 } from "../model/mod.ts";
 import {
@@ -232,6 +233,7 @@ function emitBodyViaAst(
   cachedEntries: Entry[] | undefined,
   proseFormat: ProseFormatter | undefined,
   lineWidth: number,
+  preserveModalCasing = false,
 ): boolean {
   // When the caller supplies pre-parsed entries whose line numbers are still
   // valid in `lines` (i.e., no line-count-changing operations occurred before
@@ -299,6 +301,7 @@ function emitBodyViaAst(
         undefined,
         proseFormat,
         lineWidth,
+        preserveModalCasing,
       );
       for (const { token, original } of replacements) {
         const at = fragment.findIndex((line) => line.trim() === token);
@@ -355,7 +358,8 @@ function emitBodyViaAst(
     // emit; `render`+`build` is the inverse on canonical input for
     // every body shape under the equivalence gate.
     const ast0 = buildBodyAst(entry.body);
-    const canonical = normalizeBodyAst(ast0);
+    // `modal-keywords.casing: preserve` keeps the source keyword casing.
+    const canonical = preserveModalCasing ? ast0 : normalizeBodyAst(ast0);
     const emittedBody = renderBodyAst(canonical);
 
     if (!astEquivalent(buildBodyAst(emittedBody), canonical)) {
@@ -469,6 +473,12 @@ function emitBodyViaAst(
 export interface FormatOptions {
   /** File path for diagnostic messages. */
   readonly file?: string;
+  /**
+   * Effective profile conventions. `modal-keywords.casing: preserve` keeps
+   * the source casing of modal and EARS keywords in entry bodies instead of
+   * the §3.4.1 canonical casing.
+   */
+  readonly conventions?: EffectiveProfile["conventions"];
   /** ULID generator override (for testing). */
   readonly generateUlid?: () => string;
   /**
@@ -995,6 +1005,8 @@ function formatEntries(
       changed ? undefined : entries,
       proseFormat,
       style.lineWidth,
+      options?.conventions?.get("modal-keywords")?.value.settings["casing"] ===
+        "preserve",
     )
   ) changed = true;
 

@@ -79,6 +79,7 @@ import {
   type CompileResult,
   type EffectiveProfile,
   type Entry,
+  format,
   formatEntryOrigin,
   isCorpusEntry,
   loadMarkdownFormatter,
@@ -740,8 +741,9 @@ export function createDeskHandler(
         entry.displayId,
         change.body,
         formatProse,
-        undefined,
+        format,
         source.markdownStyle,
+        source.profile?.conventions,
       );
       if (!outcome.ok) return refusalResponse(outcome.refusal);
       const body: ProposalPreview = {
@@ -762,8 +764,9 @@ export function createDeskHandler(
       entry.displayId,
       change.body,
       formatProse,
-      undefined,
+      format,
       source.markdownStyle,
+      source.profile?.conventions,
     );
     if (!outcome.ok) return refusalResponse(outcome.refusal);
     // The pipeline formats the whole file, which takes time on a large
